@@ -1,0 +1,331 @@
+#define NOMINMAX
+#include <windows.h>
+#include <commdlg.h>
+
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <vector>
+#include <map>
+#include <set>
+#include <string>
+#include <cmath>
+#include <algorithm>
+#include <iomanip>
+#include <cctype>
+
+
+using namespace std;
+
+
+//////////////////////////// string spliter, basicly tokenizer
+vector<string> split(const string& str, const string& delimiters) {
+    vector<string> tokens;
+    size_t start = 0, end = 0;
+
+    while ((end = str.find_first_of(delimiters, start)) != string::npos) {
+        if (end > start) {
+            tokens.push_back(str.substr(start, end - start));
+        }
+        start = end + 1;
+    }
+    if (start < str.length()) {
+        tokens.push_back(str.substr(start));
+    }
+    return tokens;
+}
+
+// Function to parse the .arff file
+void parseArff(const string& filename, vector<string>& attributes, vector<vector<string>>& data) {
+    ifstream file(filename);
+    if (!file.is_open()) {
+        cerr << "Error: Could not open file!" << endl;
+        exit(1);
+    }
+
+    string line;
+    bool isDataSection = false;
+
+    while (getline(file, line)) {
+        line = line.substr(0, line.find('%')); // Remove comments
+        line.erase(remove(line.begin(), line.end(), '\r'), line.end()); // Remove override line
+        line.erase(remove(line.begin(), line.end(), '\n'), line.end()); // Remove next line
+        line.erase(line.begin(), find_if(line.begin(), line.end(), [](unsigned char ch) { return !isspace(ch); })); // Trim leading whitespace
+        if (line.empty()) continue;
+
+
+        ////// Get @ATTRIBUTE, no use right now
+        if (line.find("@ATTRIBUTE") != string::npos) {
+            vector<string> parts = split(line, " ");
+            if (parts.size() > 1) {
+                attributes.push_back(parts[1]);
+            }
+        }
+        //////
+
+        else if (line.find("@DATA") != string::npos) {
+            isDataSection = true;
+        }
+        else if (isDataSection) {
+            // Use ' ' and ',' as delimiters
+            vector<string> values = split(line, " ,");//////////////////////////////  check
+            data.push_back(values);
+        }
+    }
+    file.close();
+}
+
+
+////////////////////////////// discretizer numeric data into bins
+void discretizeData(const vector<vector<string>>& data,
+    vector<vector<string>>& discretizedData,// save location of discretize data
+    const vector<string>& attributes,// save the name of attribute(not used)
+    map<string, vector<pair<double, double>>>& ranges,//pair each attribute name to its range
+    int numBins) {//how many bins do we have(((((((((((((((((bine are our flags))))))))))))))))))))) 
+
+    size_t numAttributes = attributes.size();
+    vector<bool> isNumeric(numAttributes, true);
+
+    // cehck if attributes are numeric or not
+    for (size_t i = 0; i < numAttributes; i++) {
+        for (const auto& row : data) {
+            try {
+                stod(row[i]);
+            }
+            catch (...) {
+                isNumeric[i] = false;
+                break;
+            }
+        }
+    }
+
+    vector<double> mins(numAttributes, numeric_limits<double>::max());////// these are for each range
+    vector<double> maxs(numAttributes, numeric_limits<double>::lowest());////////////  same ^
+
+    // Find min and max for each numeric attribute
+    for (size_t i = 0; i < numAttributes; i++) {
+        if (isNumeric[i]) {
+            for (const auto& row : data) {
+                double value = stod(row[i]);
+                mins[i] = min(mins[i], value);
+                maxs[i] = max(maxs[i], value);
+            }
+        }
+    }
+
+    ////////////////////             Create ranges for numeric attributes
+    for (size_t i = 0; i < numAttributes; i++) {////// these are for each attribute(column not row)
+        if (isNumeric[i]) {
+            double range = (maxs[i] - mins[i]) / numBins;
+            for (int bin = 0; bin < numBins; bin++) {
+                double start = mins[i] + bin * range;
+                double end = (bin == numBins - 1) ? maxs[i] : start + range;
+                ranges[attributes[i]].push_back({ start, end });
+            }
+        }
+    }
+    ///////////////////
+
+    // Create discretized data
+    for (const auto& row : data) {
+        vector<string> discretizedRow;
+        for (size_t i = 0; i < numAttributes; i++) {
+            if (isNumeric[i]) {
+                double value = stod(row[i]);
+                for (size_t bin = 0; bin < ranges[attributes[i]].size(); bin++) {
+                    if (value >= ranges[attributes[i]][bin].first && value <= ranges[attributes[i]][bin].second) {
+                        //////////////////// basicly showing the range of each attribute like this:  name of attribute(from this-to this)
+                        string rangeStr = "(" + to_string(ranges[attributes[i]][bin].first) + "-" +
+                            to_string(ranges[attributes[i]][bin].second) + ")";
+                        ///////////////////////////////////////////////////////////////////////////////////
+                        discretizedRow.push_back(to_string(bin + 1) + rangeStr);
+                        break;
+                    }
+                }
+            }
+            else {
+                discretizedRow.push_back(row[i]);
+            }
+        }
+        discretizedData.push_back(discretizedRow);
+    }
+}
+
+// Function to generate frequent itemsets using Apriori
+vector<map<set<string>, int>> apriori(const vector<vector<string>>& transactions, double minSupport) {
+    map<set<string>, int> itemsetCounts;
+    vector<map<set<string>, int>> allFrequentItemsets;
+    int minSupportCount = ceil(minSupport * transactions.size());
+
+    // Generate 1-itemsets
+    for (auto transaction : transactions) {
+        sort(transaction.begin(), transaction.end()); // Ensure transactions are sorted
+        for (const auto& item : transaction) {
+            set<string> itemset = { item };
+            itemsetCounts[itemset]++;
+        }
+    }
+
+    // Filter 1-itemsets
+    map<set<string>, int> currentItemsets;
+    for (const auto& itemsetCount : itemsetCounts) {
+        if (itemsetCount.second >= minSupportCount) {
+            currentItemsets[itemsetCount.first] = itemsetCount.second;
+        }
+    }
+
+    allFrequentItemsets.push_back(currentItemsets);
+
+    // Generate k-itemsets
+    while (!currentItemsets.empty()) {
+        map<set<string>, int> candidateCounts;
+
+        // Generate candidate itemsets by combining previous itemsets
+        for (auto it1 = currentItemsets.begin(); it1 != currentItemsets.end(); ++it1) {
+            for (auto it2 = next(it1); it2 != currentItemsets.end(); ++it2) {
+                set<string> candidate;
+                set_union(it1->first.begin(), it1->first.end(),
+                    it2->first.begin(), it2->first.end(),
+                    inserter(candidate, candidate.begin()));
+                if (candidate.size() == it1->first.size() + 1) {
+                    for (auto transaction : transactions) {
+                        sort(transaction.begin(), transaction.end()); // Ensure transactions are sorted
+                        if (includes(transaction.begin(), transaction.end(), candidate.begin(), candidate.end())) {
+                            candidateCounts[candidate]++;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Filter candidates
+        currentItemsets.clear();
+        for (const auto& candidateCount : candidateCounts) {
+            if (candidateCount.second >= minSupportCount) {
+                currentItemsets[candidateCount.first] = candidateCount.second;
+            }
+        }
+
+        if (!currentItemsets.empty()) {
+            allFrequentItemsets.push_back(currentItemsets);
+        }
+    }
+
+    return allFrequentItemsets;
+}
+
+
+wstring openFileDialog() {
+    OPENFILENAMEW ofn;               // Note the 'W' for Unicode support
+    WCHAR szFile[260] = { 0 };       // Buffer for the file name
+    ZeroMemory(&ofn, sizeof(ofn));   // Clear the structure
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = nullptr;         // No owner window
+    ofn.lpstrFile = szFile;          // File name buffer
+    ofn.nMaxFile = sizeof(szFile) / sizeof(WCHAR);
+    ofn.lpstrFilter = L"All Files\0*.*\0ARFF Files\0*.arff\0"; // File filters
+    ofn.nFilterIndex = 1;
+    ofn.lpstrFileTitle = nullptr;
+    ofn.nMaxFileTitle = 0;
+    ofn.lpstrInitialDir = nullptr;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+
+    // Display the Open dialog box
+    if (GetOpenFileNameW(&ofn) == TRUE) {
+        return wstring(ofn.lpstrFile);
+    }
+    else {
+        return L""; // Return an empty string if the user cancels
+    }
+}
+
+// Function to read the content of a file into a wide string
+wstring readFileAsString(const wstring& filePath) {
+    wifstream fileStream(filePath);
+    if (!fileStream) {
+        wcerr << L"Unable to open file: " << filePath << endl;
+        return L"";
+    }
+
+    wstringstream buffer;
+    buffer << fileStream.rdbuf(); // Read entire file into a wide string stream
+    return buffer.str();
+}
+
+
+int main() {
+
+
+    //////////////////////////////////////////   WELLCOME TEXT
+    std::ifstream WelcomeFile("welcomeText.txt");
+    if (!WelcomeFile.is_open()) {
+        std::cerr << "Error: Could not open the file." << std::endl;
+        return 1;
+    }
+
+    const std::string WHITE_ON_BLUE = "\033[97;44m";
+    const std::string RESET = "\033[0m";
+    std::string welcomeline;
+
+    while (std::getline(WelcomeFile, welcomeline)) {
+        std::cout << WHITE_ON_BLUE << welcomeline << RESET << std::endl;
+    }
+
+    WelcomeFile.close();
+    //////////////////////////////////////////
+
+    // File selection
+    wcout << L"Press Enter to select a file..." << endl;
+    wcin.ignore();
+    wstring filename = openFileDialog();
+    if (filename.empty()) {
+        wcerr << L"No file selected." << endl;
+        return 1;
+    }
+
+    // Parse .arff file
+    vector<string> attributes;
+    vector<vector<string>> data;
+    parseArff(string(filename.begin(), filename.end()), attributes, data);
+
+
+    int numBins;
+    cout << "Enter the number of bins (1-100): ";
+    cin >> numBins;
+    if (numBins < 1 || numBins > 100) {
+        cerr << "Error: Number of bins must be between 1 and 100." << endl;
+        return 1;
+    }
+
+    vector<vector<string>> discretizedData;
+    map<string, vector<pair<double, double>>> ranges;
+    discretizeData(data, discretizedData, attributes, ranges, numBins);
+
+    double minSupport;
+    cout << "Enter minimum support (e.g., 0.5 for 50%): ";
+    cin >> minSupport;
+
+    vector<map<set<string>, int>> allFrequentItemsets = apriori(discretizedData, minSupport);
+
+    ////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+    for (size_t i = 0; i < allFrequentItemsets.size(); ++i) {
+        cout << "Frequent " << i + 1 << "-itemsets:" << endl;
+        for (const auto& itemsetCount : allFrequentItemsets[i]) {
+            double support = static_cast<double>(itemsetCount.second) / discretizedData.size();
+            cout << "  {";
+            for (auto it = itemsetCount.first.begin(); it != itemsetCount.first.end(); ++it) {
+                if (it != itemsetCount.first.begin()) cout << ", ";
+                cout << *it;
+            }
+            cout << "}: " << fixed << setprecision(2) << support << endl;
+        }
+        cout << endl;
+    }
+    std::cout << "Press ENTER to continue...";
+    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+
+    return 0;
+}

@@ -1,0 +1,17 @@
+@RELATION test_data
+
+@ATTRIBUTE age NUMERIC
+@ATTRIBUTE income NUMERIC
+@ATTRIBUTE student {yes, no}
+@ATTRIBUTE credit_rating {excellent, fair}
+@ATTRIBUTE buys_computer {yes, no}
+
+@DATA
+25,50000,yes,fair,yes
+30,60000,no,excellent,no
+35,80000,no,fair,no
+40,40000,yes,fair,yes
+45,30000,yes,excellent,no
+50,70000,no,excellent,yes
+55,90000,no,fair,no
+60,100000,yes,excellent,yes

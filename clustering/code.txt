@@ -1,0 +1,290 @@
+//kmeans code:
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <vector>
+#include <cmath>
+#include <cstdlib>
+#include <ctime>
+#include <algorithm>
+#include <iomanip> 
+#include <map> 
+#include <windows.h>
+#include <commdlg.h>
+
+using namespace std;
+
+//////////////////calculate Euclidean distance between two items
+float calculateDistance(const vector<float>& item1, const vector<float>& item2) {
+    float sum = 0.0;
+    for (size_t i = 0; i < item1.size(); ++i) {
+        float diff = item1[i] - item2[i];
+        sum += diff * diff;
+    }
+    return sqrt(sum);
+}
+
+///////////////////////////////   FIND THE FLAGGER
+vector<float> findCentroid(const vector<vector<float>>& cluster) {
+    size_t numAttributes = cluster[0].size();
+    vector<float> centroid(numAttributes, 0.0);
+
+    for (const auto& item : cluster) {
+        for (size_t i = 0; i < numAttributes; ++i) {
+            centroid[i] += item[i];
+        }
+    }
+
+    for (size_t i = 0; i < numAttributes; ++i) {
+        centroid[i] /= cluster.size();
+    }
+
+    return centroid;
+}
+
+//////////////////////////// PRINT PRECENT BAR
+void printClusterBar(const vector<int>& clusterSizes, int totalItems, const vector<string>& colors) {
+    int totalBarLength = 100; // Total number of I
+    vector<int> barLengths(clusterSizes.size(), 0);
+
+    int totalPrinted = 0;
+
+    // Calculate approximate bar lengths
+    for (size_t i = 0; i < clusterSizes.size(); ++i) {
+        barLengths[i] = (clusterSizes[i] * totalBarLength) / totalItems;
+        totalPrinted += barLengths[i];
+    }
+
+    // Distribute remaining 'I's due to rounding errors
+    int remaining = totalBarLength - totalPrinted;
+    for (size_t i = 0; i < clusterSizes.size() && remaining > 0; ++i) {
+        barLengths[i]++;
+        remaining--;
+    }
+    cout << "<<";
+    // Print the bar
+    for (size_t i = 0; i < clusterSizes.size(); ++i) {
+        cout << "\033[" << colors[i % colors.size()] << "m"; // Set color
+        for (int j = 0; j < barLengths[i]; ++j) {
+            cout << "I";
+        }
+        cout << "\033[0m"; // Reset color
+    }
+    cout << ">>" << endl;
+
+}
+
+
+
+
+wstring openFileDialog() {
+    // Initialize the OPENFILENAME structure
+    OPENFILENAMEW ofn;               // Note the 'W' for Unicode support
+    WCHAR szFile[260] = { 0 };         // Buffer for the file name
+    ZeroMemory(&ofn, sizeof(ofn));   // Clear the structure
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = nullptr;         // No owner window
+    ofn.lpstrFile = szFile;          // File name buffer
+    ofn.nMaxFile = sizeof(szFile) / sizeof(WCHAR);
+    ofn.lpstrFilter = L"All Files\0*.*\0ARFF Files\0*.arff\0"; // File filters
+    ofn.nFilterIndex = 1;
+    ofn.lpstrFileTitle = nullptr;
+    ofn.nMaxFileTitle = 0;
+    ofn.lpstrInitialDir = nullptr;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+
+    // Display the Open dialog box
+    if (GetOpenFileNameW(&ofn) == TRUE) {
+        return wstring(ofn.lpstrFile);
+    }
+    else {
+        return L""; // Return an empty string if the user cancels
+    }
+}
+
+
+int main() {
+    //////////////////////////////////////////   WELLCOME TEXT
+    std::ifstream WelcomeFile("welcomeText.txt");
+    if (!WelcomeFile.is_open()) {
+        std::cerr << "Error: Could not open the file." << std::endl;
+        return 1;
+    }
+    const std::string WHITE_ON_BLUE = "\033[97;44m";
+    const std::string RESET = "\033[0m";
+    std::string welcomeline;
+    while (std::getline(WelcomeFile, welcomeline)) {
+        std::cout << WHITE_ON_BLUE << welcomeline << RESET << std::endl;
+    }
+    WelcomeFile.close();
+    //////////////////////////////////////////
+
+
+    //////////////////////////////////////////////////////  CHOOSING FILE
+    wcout << L"Press Enter to select a file..." << endl;
+    wcin.ignore(); // Wait for Enter key
+
+    wstring filename = openFileDialog();
+
+    if (filename.empty()) {
+        wcerr << L"No file selected." << endl;
+        return 1;
+    }
+    //string filename = "input.arff";
+
+
+    /////////////////////////////////////////////////////////
+    ifstream file(filename);
+    string line;
+
+    if (!file.is_open()) {
+        cerr << "Error: Could not open the file." << endl;
+        return 1;
+    }
+
+    // Skip header
+    bool dataSectionFound = false;
+    while (getline(file, line)) {
+        line.erase(remove_if(line.begin(), line.end(), ::isspace), line.end());
+        if (line == "@DATA") {
+            dataSectionFound = true;
+            break;
+        }
+    }
+
+    if (!dataSectionFound) {
+        cerr << "Error: @DATA section not found in the file." << endl;
+        return 1;
+    }
+
+    // Read the data part
+    vector<vector<float>> items;
+    while (getline(file, line)) {
+        line.erase(remove_if(line.begin(), line.end(), ::isspace), line.end());
+        if (line.empty()) continue;
+
+        stringstream ss(line);
+        vector<float> item;
+        float value;
+        while (ss >> value) {
+            item.push_back(value);
+        }
+        if (!item.empty()) {
+            items.push_back(item);
+        }
+    }
+
+    file.close();
+
+    if (items.empty()) {
+        cerr << "Error: No data found in the file after @DATA." << endl;
+        return 1;
+    }
+
+    size_t numItems = items.size();
+    size_t numAttributes = items[0].size();
+    size_t k;
+
+    cout << "Enter the desired number of clusters (0-100): ";
+    cin >> k;
+
+    if (k <= 0 || k > numItems) {
+        cerr << "Error: Invalid number of clusters. Please enter a value between 1 and " << numItems << "." << endl;
+        return 1;
+    }
+    unsigned int seed;
+    cout << "Enter a seed value for reproducible results: ";
+    cin >> seed;
+    srand(seed);
+
+    vector<vector<float>> flaggers;
+    vector<vector<vector<float>>> clusters;
+
+    // Clustering loop
+    flaggers.clear();
+    clusters.clear();
+
+    // Select k random flaggers  
+    for (size_t i = 0; i < k; ++i) {
+        int randomIndex = rand() % numItems;
+        flaggers.push_back(items[randomIndex]);
+        clusters.emplace_back();
+    }
+
+    bool hasChanged;
+    do {
+        hasChanged = false;
+
+        //////// clusters re-assignment
+        for (auto& cluster : clusters) {
+            cluster.clear();
+        }
+
+        ////////////////////////// Assign items to the closest flagger
+        for (const auto& item : items) {
+            size_t closestFlagger = 0;
+            float minDistance = calculateDistance(item, flaggers[0]);
+
+            for (size_t i = 1; i < k; ++i) {
+                float distance = calculateDistance(item, flaggers[i]);
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    closestFlagger = i;
+                }
+            }
+
+            clusters[closestFlagger].push_back(item);
+        }
+
+        /////////// Update flaggers to be the centroid of their respective clusters
+        for (size_t i = 0; i < k; ++i) {
+            if (!clusters[i].empty()) {
+                vector<float> newCentroid = findCentroid(clusters[i]);
+                if (newCentroid != flaggers[i]) {
+                    flaggers[i] = newCentroid;
+                    hasChanged = true;
+                }
+            }
+        }
+    } while (hasChanged);
+
+
+
+    cout << "Clustering completed with " << k << " clusters.\n\n";
+
+    for (size_t i = 0; i < k; ++i) {
+        cout << "Cluster " << i + 1 << " (Centroid: ";
+        for (size_t j = 0; j < flaggers[i].size(); ++j) {
+            cout << flaggers[i][j];
+            if (j < flaggers[i].size() - 1) cout << ", ";
+        }
+        cout << "):\n";
+
+        for (const auto& item : clusters[i]) {
+            cout << "  [";
+            for (size_t j = 0; j < item.size(); ++j) {
+                cout << item[j];
+                if (j < item.size() - 1) cout << ", ";
+            }
+            cout << "]\n";
+        }
+        cout << endl;
+    }
+
+    cout << "Distribution bar:\n";
+
+    
+    ///////////////////////// Red,Green,Yellow,Blue,Magenta,Cyan
+    vector<string> colors = { "31", "32", "33", "34", "35", "36" }; 
+
+    vector<int> clusterSizes;
+    for (const auto& cluster : clusters) {
+        clusterSizes.push_back(cluster.size());
+    }
+
+    printClusterBar(clusterSizes, numItems, colors);
+
+    //cout << ">>";
+
+    return 0;
+}
